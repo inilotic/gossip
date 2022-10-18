@@ -3,13 +3,14 @@ package transaction
 import (
 	"errors"
 	"fmt"
+	"github.com/inilotic/gossip/log"
+	"go.uber.org/zap"
 	"sync"
 	"time"
 
-	"github.com/stefankopieczek/gossip/base"
-	"github.com/stefankopieczek/gossip/log"
-	"github.com/stefankopieczek/gossip/timing"
-	"github.com/stefankopieczek/gossip/transport"
+	"github.com/inilotic/gossip/base"
+	"github.com/inilotic/gossip/timing"
+	"github.com/inilotic/gossip/transport"
 )
 
 var (
@@ -23,6 +24,7 @@ type Manager struct {
 	transport transport.Manager
 	requests  chan *ServerTransaction
 	txLock    *sync.RWMutex
+	logger    *zap.SugaredLogger
 }
 
 // Transactions are identified by the branch parameter in the top Via header, and the method. (RFC 3261 17.1.3)
@@ -31,11 +33,12 @@ type key struct {
 	method string
 }
 
-func NewManager(t transport.Manager, addr string) (*Manager, error) {
+func NewManager(t transport.Manager, addr string, logger *zap.SugaredLogger) (*Manager, error) {
 	mng := &Manager{
 		txs:       map[key]Transaction{},
 		txLock:    &sync.RWMutex{},
 		transport: t,
+		logger:    logger,
 	}
 
 	mng.requests = make(chan *ServerTransaction, 5)
@@ -69,7 +72,7 @@ func (mng *Manager) Requests() <-chan *ServerTransaction {
 func (mng *Manager) putTx(tx Transaction) {
 	viaHeaders := tx.Origin().Headers("Via")
 	if len(viaHeaders) == 0 {
-		log.Warn("No Via header on new transaction. Transaction will be dropped.")
+		mng.logger.Warn("No Via header on new transaction. Transaction will be dropped.")
 		return
 	}
 
@@ -81,7 +84,7 @@ func (mng *Manager) putTx(tx Transaction) {
 
 	branch, ok := (*via)[0].Params.Get("branch")
 	if !ok {
-		log.Warn("No branch parameter on top Via header.  Transaction will be dropped.")
+		mng.logger.Warn("No branch parameter on top Via header.  Transaction will be dropped.")
 		return
 	}
 
@@ -90,10 +93,10 @@ func (mng *Manager) putTx(tx Transaction) {
 	case base.String:
 		k = key{branch.String(), string(tx.Origin().Method)}
 	case base.NoString:
-		log.Warn("Empty branch parameter on top Via header. Transaction will be dropped.")
+		mng.logger.Warn("Empty branch parameter on top Via header. Transaction will be dropped.")
 		return
 	default:
-		log.Warn("Unexpected type of branch value on top Via header: %T", branch)
+		mng.logger.Warn("Unexpected type of branch value on top Via header: %T", branch)
 		return
 	}
 	mng.txLock.Lock()
@@ -131,7 +134,8 @@ func (mng *Manager) makeKey(s base.SipMessage) (key, bool) {
 		cseqs := s.Headers("CSeq")
 		if len(cseqs) == 0 {
 			// TODO - Handle non-existent CSeq
-			panic("No CSeq on response!")
+			mng.logger.Errorf("No CSeq on response!")
+			return key{}, false
 		}
 
 		cseq, _ := s.Headers("CSeq")[0].(*base.CSeq)
@@ -147,7 +151,7 @@ func (mng *Manager) getTx(s base.SipMessage) (Transaction, bool) {
 	key, ok := mng.makeKey(s)
 	if !ok {
 		// TODO: Here we should initiate more intense searching as specified in RFC3261 section 17
-		log.Warn("Could not correlate message to transaction by branch/method. Dropping.")
+		mng.logger.Warn("Could not correlate message to transaction by branch/method. Dropping.")
 		return nil, false
 	}
 
@@ -163,7 +167,7 @@ func (mng *Manager) getTx(s base.SipMessage) (Transaction, bool) {
 func (mng *Manager) delTx(t Transaction) {
 	key, ok := mng.makeKey(t.Origin())
 	if !ok {
-		log.Debug("Could not build lookup key for transaction. Is it missing a branch parameter?")
+		mng.logger.Debug("Could not build lookup key for transaction. Is it missing a branch parameter?")
 	}
 
 	mng.txLock.Lock()
@@ -172,7 +176,7 @@ func (mng *Manager) delTx(t Transaction) {
 }
 
 func (mng *Manager) handle(msg base.SipMessage) {
-	log.Info("Received message: %s", msg.Short())
+	mng.logger.Info("Received message: %s", msg.Short())
 	switch m := msg.(type) {
 	case *base.Request:
 		mng.request(m)
@@ -185,7 +189,7 @@ func (mng *Manager) handle(msg base.SipMessage) {
 
 // Create Client transaction.
 func (mng *Manager) Send(r *base.Request, dest string) *ClientTransaction {
-	log.Debug("Sending to %v: %v", dest, r.String())
+	mng.logger.Debug("Sending to %v: %v", dest, r.String())
 
 	tx := &ClientTransaction{}
 	tx.origin = r
@@ -204,7 +208,7 @@ func (mng *Manager) Send(r *base.Request, dest string) *ClientTransaction {
 	})
 	log.Debug("Client transaction %p, timer_b set to %v!", tx, 64*T1)
 	tx.timer_b = timing.AfterFunc(64*T1, func() {
-		log.Debug("Client transaction %p, timer_b fired!", tx)
+		mng.logger.Debug("Client transaction %p, timer_b fired!", tx)
 		tx.fsm.Spin(client_input_timer_b)
 	})
 
@@ -213,7 +217,7 @@ func (mng *Manager) Send(r *base.Request, dest string) *ClientTransaction {
 
 	err := mng.transport.Send(dest, r)
 	if err != nil {
-		log.Warn("Failed to send message: %s", err.Error())
+		mng.logger.Warn("Failed to send message: %s", err.Error())
 		tx.fsm.Spin(client_input_transport_err)
 	}
 
@@ -227,7 +231,7 @@ func (mng *Manager) correlate(r *base.Response) {
 	tx, ok := mng.getTx(r)
 	if !ok {
 		// TODO: Something
-		log.Warn("Failed to correlate response to active transaction. Dropping it.")
+		mng.logger.Warn("Failed to correlate response to active transaction. Dropping it.")
 		return
 	}
 
@@ -244,7 +248,7 @@ func (mng *Manager) request(r *base.Request) {
 
 	// If we failed to correlate an ACK, just drop it.
 	if r.Method == base.ACK {
-		log.Warn("Couldn't correlate ACK to an open transaction. Dropping it.")
+		mng.logger.Warn("Couldn't correlate ACK to an open transaction. Dropping it.")
 		return
 	}
 
@@ -257,13 +261,14 @@ func (mng *Manager) request(r *base.Request) {
 	// Use the remote address in the top Via header.  This is not correct behaviour.
 	viaHeaders := tx.Origin().Headers("Via")
 	if len(viaHeaders) == 0 {
-		log.Warn("No Via header on new transaction. Transaction will be dropped.")
+		mng.logger.Warn("No Via header on new transaction. Transaction will be dropped.")
 		return
 	}
 
 	via, ok := viaHeaders[0].(*base.ViaHeader)
 	if !ok {
-		panic(errors.New("Headers('Via') returned non-Via header!"))
+		mng.logger.Warn("Headers('Via') returned non-Via header!")
+		return
 	}
 
 	if len(*via) == 0 {

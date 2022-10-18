@@ -1,9 +1,9 @@
 package parser
 
 import (
-	"github.com/stefankopieczek/gossip/base"
-	"github.com/stefankopieczek/gossip/log"
-	"github.com/stefankopieczek/gossip/utils"
+	"github.com/inilotic/gossip/base"
+	"github.com/inilotic/gossip/log"
+	"github.com/inilotic/gossip/utils"
 )
 
 import (
@@ -367,8 +367,9 @@ func isResponse(startLine string) bool {
 }
 
 // Parse the first line of a SIP request, e.g:
-//   INVITE bob@example.com SIP/2.0
-//   REGISTER jane@telco.com SIP/1.0
+//
+//	INVITE bob@example.com SIP/2.0
+//	REGISTER jane@telco.com SIP/1.0
 func parseRequestLine(requestLine string) (
 	method base.Method, recipient base.Uri, sipVersion string, err error) {
 	parts := strings.Split(requestLine, " ")
@@ -390,8 +391,9 @@ func parseRequestLine(requestLine string) (
 }
 
 // Parse the first line of a SIP response, e.g:
-//   SIP/2.0 200 OK
-//   SIP/1.0 403 Forbidden
+//
+//	SIP/2.0 200 OK
+//	SIP/1.0 403 Forbidden
 func parseStatusLine(statusLine string) (
 	sipVersion string, statusCode uint16, reasonPhrase string, err error) {
 	parts := strings.Split(statusLine, " ")
@@ -1059,6 +1061,7 @@ func parseAddressValues(addresses string) (
 //   - a parsed SipUri object
 //   - a map containing any header parameters present
 //   - the error object
+//
 // See RFC 3261 section 20.10 for details on parsing an address.
 // Note that this method will not accept a comma-separated list of addresses;
 // addresses in that form should be handled by parseAddressValues.

@@ -2,12 +2,12 @@ package transport
 
 import (
 	"fmt"
+	"go.uber.org/zap"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/stefankopieczek/gossip/base"
-	"github.com/stefankopieczek/gossip/log"
+	"github.com/inilotic/gossip/base"
 )
 
 const c_BUFSIZE int = 65507
@@ -24,6 +24,7 @@ type Manager interface {
 type manager struct {
 	notifier
 	transport transport
+	logger    *zap.SugaredLogger
 }
 
 type transport interface {
@@ -33,11 +34,12 @@ type transport interface {
 	Stop()
 }
 
-func NewManager(transportType string) (m Manager, err error) {
+func NewManager(transportType string, logger *zap.SugaredLogger) (m Manager, err error) {
 	err = fmt.Errorf("Unknown transport type '%s'", transportType)
 
 	var n notifier
 	n.init()
+	n.logger = logger
 
 	var transport transport
 	switch strings.ToLower(transportType) {
@@ -50,7 +52,7 @@ func NewManager(transportType string) (m Manager, err error) {
 	}
 
 	if transport != nil && err == nil {
-		m = &manager{notifier: n, transport: transport}
+		m = &manager{notifier: n, transport: transport, logger: logger}
 	} else {
 		// Close the input chan in order to stop the notifier; this prevents
 		// us leaking it.
@@ -77,6 +79,7 @@ type notifier struct {
 	listeners    map[Listener]bool
 	listenerLock sync.Mutex
 	inputs       chan base.SipMessage
+	logger       *zap.SugaredLogger
 }
 
 func (n *notifier) init() {
@@ -86,7 +89,7 @@ func (n *notifier) init() {
 }
 
 func (n *notifier) register(l Listener) {
-	log.Debug("Notifier %p has new listener %p", n, l)
+	n.logger.Debug("Notifier %p has new listener %p", n, l)
 	if n.listeners == nil {
 		n.listeners = make(map[Listener]bool)
 	}
@@ -105,7 +108,7 @@ func (n *notifier) forward() {
 	for msg := range n.inputs {
 		deadListeners := make([]chan base.SipMessage, 0)
 		n.listenerLock.Lock()
-		log.Debug(fmt.Sprintf("Notify %d listeners of message", len(n.listeners)))
+		n.logger.Debug(fmt.Sprintf("Notify %d listeners of message", len(n.listeners)))
 		for listener := range n.listeners {
 			sent := listener.notify(msg)
 			if !sent {
@@ -113,7 +116,7 @@ func (n *notifier) forward() {
 			}
 		}
 		for _, deadListener := range deadListeners {
-			log.Debug(fmt.Sprintf("Expiring listener %#v", deadListener))
+			n.logger.Debug(fmt.Sprintf("Expiring listener %v", deadListener))
 			delete(n.listeners, deadListener)
 		}
 		n.listenerLock.Unlock()
