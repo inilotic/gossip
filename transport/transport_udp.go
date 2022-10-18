@@ -61,7 +61,7 @@ func (udp *Udp) Send(addr string, msg base.SipMessage) error {
 }
 
 func (udp *Udp) listen(conn *net.UDPConn) {
-	log.Info("Begin listening for UDP on address %s", conn.LocalAddr())
+	//log.Info("Begin listening for UDP on address %s", conn.LocalAddr())
 
 	buffer := make([]byte, c_BUFSIZE)
 	for {

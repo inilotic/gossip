@@ -176,7 +176,6 @@ func (mng *Manager) delTx(t Transaction) {
 }
 
 func (mng *Manager) handle(msg base.SipMessage) {
-	mng.logger.Info("Received message: %s", msg.Short())
 	switch m := msg.(type) {
 	case *base.Request:
 		mng.request(m)
